@@ -1,4 +1,6 @@
 library(tidyverse)
+library(magrittr)
+library(readxl)
 library(glue)
 library(sf)
 library(osmdata)
@@ -107,5 +109,90 @@ anim_save("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\COVID_by_boro.g
 # Linear Models and Analytics ---------------------------------------------
 ### Slide 5
 
+test = read_xlsx("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Data\\NYC-demographic-other-data.xlsx",
+          sheet = 'population') %>%
+  janitor::clean_names('snake') %>% 
+  select(sub_borough_area, x2018) %>% 
+  rename('population' = 2) %>% 
+  inner_join(., read_xlsx("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Data\\NYC-housing-data.xlsx",
+                          sheet = 'homeowner income') %>% 
+                janitor::clean_names('snake') %>% 
+                select(sub_borough_area, x2018) %>% 
+                rename('h_income' = 2),
+             by = 'sub_borough_area') %>% 
+  inner_join(., read_xlsx("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Data\\NYC-housing-data.xlsx",
+                          sheet = 'renter income') %>% 
+               janitor::clean_names('snake') %>% 
+               select(sub_borough_area, x2018) %>% 
+               rename('r_income' = 2),
+             by = 'sub_borough_area') %>%
+  inner_join(., read_xlsx("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Data\\NYC-housing-data.xlsx",
+                          sheet = 'home ownership rate') %>% 
+               janitor::clean_names('snake') %>% 
+               select(sub_borough_area, x2018) %>% 
+               rename('own_pct' = 2),
+             by = 'sub_borough_area') %>%
+  inner_join(., read_xlsx("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Data\\sub_boro_cd_conversion.xlsx", 
+                          sheet = 1) %>% 
+                mutate(sub_borough_area = ifelse(is.na(sub_borough_area), census_name, sub_borough_area)),
+             by = 'sub_borough_area') %>% 
+  mutate(boro_code = strsplit(as.character(boro_cd), ", ")) %>% 
+  unnest(boro_code) %>% 
+  mutate(boro_code = as.numeric(boro_code)) %>% 
+  inner_join(., read_sf("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Shapefiles\\zcta_borocd_merged.geojson") %>% 
+                tibble() %>% 
+                select(BoroCD, COVID_CASE_COUNT) %>%
+                distinct() %>%
+                group_by(BoroCD) %>%
+                summarise(n = mean(COVID_CASE_COUNT, na.rm=T)),
+             by = c('boro_code' = 'BoroCD')) %>% 
+  mutate(nrate = n/population,
+         income = own_pct*h_income + (1-own_pct)*r_income)
+
+mod = lm(log(nrate) ~ log(income), data = test) %>% summary()
+
+read_csv(glue('{path}/Borough_Density.csv')) %>% 
+  inner_join(., read_csv('https://raw.githubusercontent.com/nychealth/coronavirus-data/master/totals/by-boro.csv') %>% 
+                  mutate(boro = ifelse(str_detect(BOROUGH_GROUP, 'Staten'), 
+                                       'Staten Island', BOROUGH_GROUP))) %$% cor(ppl_per_hh, CASE_RATE)
+
+# Open Street Maps --------------------------------------------------------
+
+nyc = getbb("New York City")
+
+streets = nyc %>%
+  opq() %>%
+  add_osm_feature(key = "highway",
+                  value = c("motorway", "primary", "motorway_link", "primary_link",
+                            'secondary')) %>%
+  osmdata_sf()
+
+st = c("motorway", "primary", "secondary", "tertiary", 
+       "residential", "living_street","unclassified",
+       "service", "footway")
+
+hospitals = nyc %>% 
+  opq() %>% 
+  add_osm_feature(key = 'amenity', value = 'hospital') %>% 
+  osmdata_sf()
+
+ggplot() +
+  geom_sf(data = streets$osm_lines, color = "gray70",
+          size = .1, alpha = .8) +
+  geom_sf(data = hospitals$osm_points, size = 3, color = red, alpha = 0.5) +
+  coord_sf(xlim = nyc[1,], 
+           ylim = nyc[2,],
+           expand = FALSE) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = '#121212'))
+ggsave('C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\nyc_map.pdf', height = 7, width = 5, units = 'in')  
 
 
+read_sf("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Shapefiles\\zcta_borocd_merged.geojson") %>% 
+  st_join(., hospitals$osm_points) %>% 
+  tibble() %>% 
+  group_by(BoroCD) %>% 
+  summarise(hosps = n_distinct(osm_id), 
+            cov = mean(COVID_CASE_RATE)) %$% cor(hosps, cov)
+
+hosps = hospitals$osm_points
