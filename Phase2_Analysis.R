@@ -157,6 +157,7 @@ read_csv(glue('{path}/Borough_Density.csv')) %>%
                                        'Staten Island', BOROUGH_GROUP))) %$% cor(ppl_per_hh, CASE_RATE)
 
 # Open Street Maps --------------------------------------------------------
+### Slide 6
 
 nyc = getbb("New York City")
 
@@ -195,4 +196,97 @@ read_sf("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Shapefiles\\zcta_borocd_
   summarise(hosps = n_distinct(osm_id), 
             cov = mean(COVID_CASE_RATE)) %$% cor(hosps, cov)
 
-hosps = hospitals$osm_points
+vax = nyc %>% 
+  opq() %>% 
+  add_osm_feature(key = 'healthcare', value = 'vaccination_centre') %>% 
+  osmdata_sf()
+
+ggplot() +
+  geom_sf(data = streets$osm_lines, color = "gray70",
+          size = .1, alpha = .8) +
+  geom_sf(data = vax$osm_points, size = 3, color = red, alpha = 0.5) +
+  coord_sf(xlim = nyc[1,], 
+           ylim = nyc[2,],
+           expand = FALSE) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = '#121212'))
+ggsave('C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\nyc_vax_map.pdf', height = 7, width = 5, units = 'in') 
+
+# Infection Rates ---------------------------------------------------------
+
+read_sf("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Shapefiles\\zcta_borocd_merged.geojson") %>% 
+  mutate(n = ntile(COVID_CASE_RATE, 4)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = n), color = 'gray20', show.legend = F) +
+  scale_fill_gradient(low = colorspace::darken(red, 0.95), high = red) +
+  theme_arg() 
+ggsave('C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\nyc_covdi_rate.png', height = 11, width = 8.5, units = 'in') 
+
+# Vaccine Rate ------------------------------------------------------------
+
+ta = read_csv(glue('{path}/vaccine_rates.csv')) %>% 
+  mutate(date = as.Date(Date, '%m/%d/%Y')) %>% 
+  ggplot() +
+  aes(x = date, y = doses) +
+  geom_area(color = red, fill = red, alpha = 0.25, size = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = 'COVID-19 Vaccinations in New York City',
+       x = "Date",
+       y = "Vaccines Given",
+       caption = '{frame_along}') +
+  theme_arg(factor = 0.8) +
+  transition_reveal(date)
+animate(ta, height = 5, width = 7, nframes = 200, fps = 20, units = 'in', res = 100, renderer = gifski_renderer(loop = F))
+anim_save("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\Vax_timeline.gif")
+
+read_csv(glue('{path}/vaccine_rates.csv')) %>% 
+  mutate(date = as.Date(Date, '%m/%d/%Y')) %>% 
+  filter(date == max(date))
+
+# Vax Hesitancy -----------------------------------------------------------
+
+hesit = read_csv(glue('{path}/Vaccine_Hesitancy_for_COVID-19__County_and_local_estimates.csv')) %>% 
+  janitor::clean_names('snake') %>%
+  select(!c(state_boundary, geographical_point, county_boundary)) %>% 
+  filter(state_code == 'NY') %>% 
+  mutate(county = str_remove_all(county_name, ', New York$')) %>% 
+  filter(county %in% c('Kings County', "Queens County", 'New York County', 'Bronx County', 'Richmond County')) %>% 
+  mutate(total_hes = estimated_hesitant + estimated_strongly_hesitant, 
+         boro = case_when(county == 'Kings County' ~ 3,
+                          county == 'Richmond County' ~ 5,
+                          county == 'New York County' ~ 1, 
+                          county == 'Bronx County' ~ 2,
+                          T ~ 4))
+
+hesit %$% cor(total_hes, social_vulnerability_index_svi)
+
+read_sf("C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Shapefiles\\zcta_borocd_merged.geojson") %>% 
+  mutate(boro = str_extract(as.character(BoroCD), '^\\d{1}') %>% as.numeric()) %>% 
+  inner_join(., hesit, by = 'boro') %>% 
+  ggplot() +
+  geom_sf(aes(fill = total_hes), color = 'gray20', show.legend = F) +
+  scale_fill_gradient(low = colorspace::darken(red, 0.75), high = red) +
+  theme_arg() +
+  labs(title = 'Vaccination Hesitancy in New York City')
+ggsave('C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\nyc_vaxhes_rate.png', height = 7, width = 7, units = 'in') 
+
+
+# Reopening ---------------------------------------------------------------
+
+data %>% 
+  filter(county == 'New York City') %>% 
+  left_join(., read_csv(glue('{path}/covid_milestones.csv')) %>% 
+                filter(type == 2) %>% 
+                filter(str_detect(milestone, 'Phase|phase|dining|Dining')), by = 'date') %>% 
+  mutate(new_cases = cases-lag(cases)) %>% 
+  ggplot() +
+  aes(x = date, y = new_cases) +
+  geom_line(color = red, size = 1.5) +
+  geom_vline(aes(xintercept = date, linetype = factor(type)), 
+             size = 2, color = '#9ad7f7', show.legend = F) +
+  theme_arg(2) +
+  labs(title = "New Cases in New York City",
+       subtitle = "Blue Lines Represent Major Reopenings",
+       x = "Date",
+       y = "New Cases")
+ggsave('C:\\RScripts\\BAC@MC 2021\\BAC-MC-2021-Phase2\\Plots\\New_cases.png', height = 5, width = 7, units = 'in') 
